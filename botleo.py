@@ -11,13 +11,12 @@ from asyncio import Lock
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # --- НАСТРОЙКИ ---
-# ⚠️ ВНИМАНИЕ: Если ты уже обновлял токен в BotFather, вставь сюда НОВЫЙ.
-TOKEN = "8520560664:AAHeSCOIVLcqwncSEc2YrC6tVULJm_lUw1k" 
-
+TOKEN = "8520560664:AAHeSCOIVLcqwncSEc2YrC6tVULJm_lUw1k"  # ⚠️ ВСТАВЬ СВОЙ ТОКЕН
 CHANNEL_ID = -1003592097094
 CHANNEL_LINK = "https://t.me/StandLeoPromo1h"
 ADMIN_PASSWORD = "maks201015"
@@ -27,13 +26,14 @@ ADMIN_ID = 1967888210
 # Время жизни промокода (23 часа 30 минут = 84600 секунд)
 CODE_LIFETIME = 84600 
 
-# Путь к базе данных (автоматически определяется текущая папка)
+# Настройка путей для PythonAnywhere
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'economy_bot.db')
 
-# --- ЗАПУСК БОТА (БЕЗ ПРОКСИ) ---
+# --- Настройка прокси ---
+session = AiohttpSession(proxy="http://proxy.server:3128")
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=TOKEN) 
+bot = Bot(token=TOKEN, session=session)
 dp = Dispatcher()
 
 # --- ГЛОБАЛЬНЫЕ БЛОКИРОВКИ ---
@@ -57,10 +57,11 @@ class BotStates(StatesGroup):
     wait_dice_bet = State()
     wait_transfer_id = State()
     wait_transfer_amount = State()
+    wait_wipe_confirm = State() # Состояние для подтверждения вайпа
 
 # --- БАЗА ДАННЫХ ---
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
         
@@ -83,7 +84,6 @@ async def init_db():
             is_used INTEGER DEFAULT 0,
             added_at INTEGER DEFAULT 0)""")
         
-        # Миграции
         try: await db.execute("ALTER TABLE users ADD COLUMN last_slots INTEGER DEFAULT 0")
         except: pass
         try: await db.execute("ALTER TABLE users ADD COLUMN max_coins REAL DEFAULT 0")
@@ -112,7 +112,7 @@ async def clean_expired_codes_loop():
             await asyncio.sleep(3600) 
             now = int(time.time())
             limit = now - CODE_LIFETIME 
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with aiosqlite.connect(DB_PATH, timeout=30) as db:
                 await db.execute("DELETE FROM promo_codes WHERE added_at < ? AND is_used = 0", (limit,))
                 await db.commit()
         except Exception as e:
@@ -121,14 +121,14 @@ async def clean_expired_codes_loop():
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 async def check_maintenance(user_id: int) -> bool:
     if user_id == ADMIN_ID: return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         try:
             m = await (await db.execute("SELECT maintenance FROM settings")).fetchone()
             return m and m[0] == 1
         except: return False
 
 async def add_coins(user_id: int, amount: float, update_stats: bool = True):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         if amount > 0:
             if update_stats:
                 await db.execute("UPDATE users SET coins = coins + ?, max_coins = max_coins + ? WHERE user_id = ?", (amount, amount, user_id))
@@ -170,8 +170,8 @@ def get_admin_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📥 Добавить коды")],
         [KeyboardButton(text="💰 Управление балансом"), KeyboardButton(text="📢 Рассылка")],
-        [KeyboardButton(text="🗑 Очистить коды"), KeyboardButton(text="⚙️ Тех. Режим")],
-        [KeyboardButton(text="🚪 Выйти из панели")]
+        [KeyboardButton(text="🗑 Очистить коды"), KeyboardButton(text="🧨 ВАЙП (Сброс)")], # Кнопка вайпа
+        [KeyboardButton(text="⚙️ Тех. Режим"), KeyboardButton(text="🚪 Выйти из панели")]
     ], resize_keyboard=True)
 
 def get_moder_kb():
@@ -187,7 +187,7 @@ async def start(message: types.Message, state: FSMContext):
         args = message.text.split() if message.text else []
         ref_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else 0
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(DB_PATH, timeout=30) as db:
             await db.execute("INSERT OR IGNORE INTO users (user_id, username, referrer_id) VALUES (?, ?, ?)", (uid, uname, ref_id))
             if ref_id != 0 and ref_id != uid:
                 await db.execute("UPDATE users SET referrer_id = ? WHERE user_id = ? AND is_active = 0 AND referrer_id = 0", (ref_id, uid))
@@ -245,7 +245,7 @@ async def clicker(message: types.Message, state: FSMContext):
     if uid in user_last_click and now - user_last_click[uid] < 0.7: return 
     user_last_click[uid] = now
     
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         res = await (await db.execute("SELECT coins FROM users WHERE user_id = ?", (uid,))).fetchone()
         bal = res[0] if res else 0
 
@@ -257,7 +257,7 @@ async def clicker(message: types.Message, state: FSMContext):
 async def profile(message: types.Message, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         res = await (await db.execute("SELECT coins, max_coins FROM users WHERE user_id = ?", (uid,))).fetchone()
     c = res[0] if res else 0
     mc = res[1] if res else 0
@@ -269,7 +269,7 @@ async def profile(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- ПЕРЕВОДЫ ---
+# --- ПЕРЕВОДЫ (С ЗАЩИТОЙ) ---
 @dp.callback_query(F.data == "transfer_start")
 async def start_transfer(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("📝 <b>Введите ID игрока</b>:", parse_mode="HTML")
@@ -282,7 +282,7 @@ async def process_transfer_id(message: types.Message, state: FSMContext):
     target_id = int(message.text)
     if target_id == message.from_user.id: return await message.answer("❌ Нельзя переводить себе!")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         exists = await (await db.execute("SELECT count(*) FROM users WHERE user_id = ?", (target_id,))).fetchone()
         if exists[0] == 0: return await message.answer("❌ Игрок не найден!")
 
@@ -302,7 +302,7 @@ async def process_transfer_amount(message: types.Message, state: FSMContext):
     
     if uid not in transfer_locks: transfer_locks[uid] = Lock()
     async with transfer_locks[uid]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(DB_PATH, timeout=30) as db:
             sender = await (await db.execute("SELECT coins, username FROM users WHERE user_id = ?", (uid,))).fetchone()
             if sender[0] < amount: return await message.answer(f"❌ Мало средств! Баланс: {sender[0]:.1f}")
             
@@ -321,7 +321,7 @@ async def process_transfer_amount(message: types.Message, state: FSMContext):
 @dp.message(F.text.contains("ТОП-10"), StateFilter("*"))
 async def top_players(message: types.Message, state: FSMContext):
     await state.clear()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         async with db.execute("SELECT username, max_coins, coins FROM users ORDER BY max_coins DESC LIMIT 10") as cursor:
             rows = await cursor.fetchall()
     
@@ -336,7 +336,7 @@ async def refer(message: types.Message, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
     me = await bot.get_me()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         cnt = await (await db.execute("SELECT COUNT(*) FROM users WHERE referrer_id = ? AND is_active = 1", (uid,))).fetchone()
     await message.answer(f"👥 Приглашено: <b>{cnt[0]}</b>\n🔗 Ссылка:\n<code>https://t.me/{me.username}?start={uid}</code>", parse_mode="HTML")
 
@@ -368,7 +368,7 @@ async def back_main(message: types.Message, state: FSMContext):
 async def slots_game(message: types.Message):
     uid = message.from_user.id
     now = int(time.time())
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         res = await (await db.execute("SELECT last_slots FROM users WHERE user_id = ?", (uid,))).fetchone()
         if res and res[0] and now - res[0] < 86400:
             return await message.answer(f"⏳ Жди {86400-(now-res[0])} сек.")
@@ -401,7 +401,7 @@ async def dice_bet_process(message: types.Message, state: FSMContext):
 
     if uid not in dice_locks: dice_locks[uid] = Lock()
     async with dice_locks[uid]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(DB_PATH, timeout=30) as db:
             bal = (await (await db.execute("SELECT coins FROM users WHERE user_id=?", (uid,))).fetchone())[0]
             if bal < bet: return await message.answer("❌ Мало монет")
             await db.execute("UPDATE users SET coins=coins-? WHERE user_id=?", (bet, uid))
@@ -460,7 +460,7 @@ async def robbery_process(call: types.CallbackQuery):
 
     if uid not in robbery_locks: robbery_locks[uid] = Lock()
     async with robbery_locks[uid]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(DB_PATH, timeout=30) as db:
             attacker = await (await db.execute("SELECT coins, username FROM users WHERE user_id=?", (uid,))).fetchone()
             if attacker[0] < s["cost"]: return await call.answer(f"❌ Не хватает {s['cost']} монет!", show_alert=True)
 
@@ -495,7 +495,7 @@ async def process_buy(call: types.CallbackQuery):
     if uid not in purchase_locks: purchase_locks[uid] = Lock()
     async with purchase_locks[uid]:
         now, one_day = int(time.time()), int(time.time()) - 86400
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(DB_PATH, timeout=30) as db:
             await db.execute("DELETE FROM purchases WHERE timestamp < ?", (one_day,))
             cnt = (await (await db.execute("SELECT COUNT(*) FROM purchases WHERE user_id=? AND timestamp > ?", (uid, one_day))).fetchone())[0]
             if cnt >= 5: return await call.answer("🚫 Лимит 5 шт!", show_alert=True)
@@ -577,7 +577,7 @@ async def save_codes(message: types.Message, state: FSMContext):
     codes = message.text.replace('\n', ' ').split()
     now = int(time.time())
     count = 0
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         for c in codes: 
             try:
                 await db.execute("INSERT INTO promo_codes (code, type, is_used, added_at) VALUES (?, ?, 0, ?)", (c.strip(), data['ptype'], now))
@@ -592,14 +592,32 @@ async def save_codes(message: types.Message, state: FSMContext):
 
 @dp.message(F.text=="🗑 Очистить коды", StateFilter(BotStates.is_admin))
 async def clear_codes(message: types.Message):
-    async with aiosqlite.connect(DB_PATH) as db: 
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db: 
         await db.execute("DELETE FROM promo_codes WHERE is_used=0")
         await db.commit()
     await message.answer("✅ База кодов очищена")
 
+# --- ВАЙП (НОВАЯ ФУНКЦИЯ) ---
+@dp.message(F.text=="🧨 ВАЙП (Сброс)", StateFilter(BotStates.is_admin))
+async def ask_wipe(message: types.Message, state: FSMContext):
+    await message.answer("⚠️ <b>ВНИМАНИЕ!</b>\nЭто сбросит баланс и ТОП у ВСЕХ игроков.\n\nНапишите <b>подтверждаю</b> для сброса:", parse_mode="HTML")
+    await state.set_state(BotStates.wait_wipe_confirm)
+
+@dp.message(BotStates.wait_wipe_confirm)
+async def confirm_wipe(message: types.Message, state: FSMContext):
+    if message.text.lower() == "подтверждаю":
+        async with aiosqlite.connect(DB_PATH, timeout=30) as db:
+            await db.execute("UPDATE users SET coins = 0, max_coins = 0")
+            await db.execute("DELETE FROM purchases") # Сброс лимитов магазина
+            await db.commit()
+        await message.answer("✅ <b>ЭКОНОМИКА ПОЛНОСТЬЮ СБРОШЕНА!</b>", parse_mode="HTML")
+    else:
+        await message.answer("❌ Отмена.")
+    await state.set_state(BotStates.is_admin)
+
 @dp.message(F.text == "⚙️ Тех. Режим", StateFilter(BotStates.is_admin))
 async def toggle_maintenance(message: types.Message):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         current = await (await db.execute("SELECT maintenance FROM settings")).fetchone()
         new_value = 0 if current and current[0] == 1 else 1
         await db.execute("UPDATE settings SET maintenance = ?", (new_value,))
@@ -610,7 +628,7 @@ async def toggle_maintenance(message: types.Message):
 
 @dp.message(F.text == "📊 Статистика", StateFilter(BotStates.is_admin, BotStates.is_moderator))
 async def stats(message: types.Message):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         u = (await (await db.execute("SELECT count(*) FROM users")).fetchone())[0]
         c = (await (await db.execute("SELECT count(*) FROM promo_codes WHERE is_used=0")).fetchone())[0]
         await message.answer(f"📊 Юзеров: {u}\n🎟 Кодов: {c}")
@@ -623,7 +641,7 @@ async def broadcast_start(message: types.Message, state: FSMContext):
 @dp.message(BotStates.wait_broadcast)
 async def broadcast_process(message: types.Message, state: FSMContext):
     msg = await message.answer("⏳ Рассылка...")
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=30) as db:
         async with db.execute("SELECT user_id FROM users") as cursor:
             users = await cursor.fetchall()
     cnt = 0
