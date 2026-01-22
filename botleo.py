@@ -11,12 +11,11 @@ from asyncio import Lock
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # --- НАСТРОЙКИ ---
-TOKEN = "8520560664:AAHeSCOIVLcqwncSEc2YrC6tVULJm_lUw1k"  # ⚠️ ВСТАВЬ СВОЙ ТОКЕН
+TOKEN = "8520560664:AAHeSCOIVLcqwncSEc2YrC6tVULJm_lUw1k" 
 CHANNEL_ID = -1003592097094
 CHANNEL_LINK = "https://t.me/StandLeoPromo1h"
 ADMIN_PASSWORD = "maks201015"
@@ -26,14 +25,13 @@ ADMIN_ID = 1967888210
 # Время жизни промокода (23 часа 30 минут = 84600 секунд)
 CODE_LIFETIME = 84600 
 
-# Настройка путей для PythonAnywhere
+# Настройка путей
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'economy_bot.db')
 
-# --- Настройка прокси ---
-session = AiohttpSession(proxy="http://proxy.server:3128")
+# --- ЗАПУСК (БЕЗ ПРОКСИ!) ---
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=TOKEN, session=session)
+bot = Bot(token=TOKEN) 
 dp = Dispatcher()
 
 # --- ГЛОБАЛЬНЫЕ БЛОКИРОВКИ ---
@@ -57,7 +55,7 @@ class BotStates(StatesGroup):
     wait_dice_bet = State()
     wait_transfer_id = State()
     wait_transfer_amount = State()
-    wait_wipe_confirm = State() # Состояние для подтверждения вайпа
+    wait_wipe_confirm = State()
 
 # --- БАЗА ДАННЫХ ---
 async def init_db():
@@ -170,7 +168,7 @@ def get_admin_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📥 Добавить коды")],
         [KeyboardButton(text="💰 Управление балансом"), KeyboardButton(text="📢 Рассылка")],
-        [KeyboardButton(text="🗑 Очистить коды"), KeyboardButton(text="🧨 ВАЙП (Сброс)")], # Кнопка вайпа
+        [KeyboardButton(text="🗑 Очистить коды"), KeyboardButton(text="🧨 ВАЙП (Сброс)")],
         [KeyboardButton(text="⚙️ Тех. Режим"), KeyboardButton(text="🚪 Выйти из панели")]
     ], resize_keyboard=True)
 
@@ -269,7 +267,7 @@ async def profile(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- ПЕРЕВОДЫ (С ЗАЩИТОЙ) ---
+# --- ПЕРЕВОДЫ ---
 @dp.callback_query(F.data == "transfer_start")
 async def start_transfer(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("📝 <b>Введите ID игрока</b>:", parse_mode="HTML")
@@ -597,10 +595,10 @@ async def clear_codes(message: types.Message):
         await db.commit()
     await message.answer("✅ База кодов очищена")
 
-# --- ВАЙП (НОВАЯ ФУНКЦИЯ) ---
+# --- ВАЙП ---
 @dp.message(F.text=="🧨 ВАЙП (Сброс)", StateFilter(BotStates.is_admin))
 async def ask_wipe(message: types.Message, state: FSMContext):
-    await message.answer("⚠️ <b>ВНИМАНИЕ!</b>\nЭто сбросит баланс и ТОП у ВСЕХ игроков.\n\nНапишите <b>подтверждаю</b> для сброса:", parse_mode="HTML")
+    await message.answer("⚠️ <b>ВНИМАНИЕ!</b>\nСброс ВСЕЙ экономики.\nНапишите <b>подтверждаю</b>:", parse_mode="HTML")
     await state.set_state(BotStates.wait_wipe_confirm)
 
 @dp.message(BotStates.wait_wipe_confirm)
@@ -608,9 +606,9 @@ async def confirm_wipe(message: types.Message, state: FSMContext):
     if message.text.lower() == "подтверждаю":
         async with aiosqlite.connect(DB_PATH, timeout=30) as db:
             await db.execute("UPDATE users SET coins = 0, max_coins = 0")
-            await db.execute("DELETE FROM purchases") # Сброс лимитов магазина
+            await db.execute("DELETE FROM purchases") 
             await db.commit()
-        await message.answer("✅ <b>ЭКОНОМИКА ПОЛНОСТЬЮ СБРОШЕНА!</b>", parse_mode="HTML")
+        await message.answer("✅ <b>ЭКОНОМИКА СБРОШЕНА!</b>", parse_mode="HTML")
     else:
         await message.answer("❌ Отмена.")
     await state.set_state(BotStates.is_admin)
